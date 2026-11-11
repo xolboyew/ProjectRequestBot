@@ -1,0 +1,68 @@
+name: Bot
+
+# Hosting yo'q bo'lgani uchun bot GitHub Actions ichida ishlaydi.
+# Bitta job ~5 soat 50 daqiqa ishlaydi, keyingisi navbatda turadi (cron) va
+# oldingisi tugashi bilan avtomatik davom ettiradi.
+on:
+  schedule:
+    - cron: "0 */5 * * *"      # har 5 soatda (UTC) — navbatga bitta job qo'yadi
+  workflow_dispatch:            # qo'lda: Actions → Bot → Run workflow
+  push:
+    branches: [main]
+    paths-ignore:
+      - "README.md"
+      - ".gitignore"
+      - ".env.example"
+
+# Bir vaqtda faqat BITTA bot ishlashi shart (aks holda Telegram 409 Conflict beradi).
+# push / qo'lda ishga tushirishda eski job to'xtatilib, yangi kod bilan qayta ishga tushadi.
+# cron esa eski job tugashini kutadi (uzilishsiz almashish).
+concurrency:
+  group: telegram-bot
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
+permissions:
+  contents: read
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Kutubxonalarni o'rnatish
+        run: pip install -r requirements.txt
+
+      - name: Secrets tekshiruvi
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          for v in BOT_TOKEN ADMIN_IDS DATABASE_URL; do
+            if [ -z "${!v}" ]; then
+              echo "::error::Secret '$v' kiritilmagan. Settings → Secrets and variables → Actions → New repository secret"
+              exit 1
+            fi
+          done
+
+      - name: Botni ishga tushirish
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          LOG_LEVEL: WARNING       # repo ochiq bo'lsa loglar ham ochiq — ortiqcha ma'lumot chiqarmaymiz
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set +e
+          timeout --signal=INT 350m python bot.py
+          code=$?
+          # 124 = vaqt tugadi (normal), keyingi cron job davom ettiradi
+          if [ "$code" -eq 124 ]; then exit 0; fi
+          exit "$code"
